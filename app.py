@@ -1,9 +1,11 @@
+import uuid
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO
 from flask_cors import CORS  # Import the CORS extension
 from database import SessionLocal  # Import the session from database.py
 from models import LLMResponseModel
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -71,18 +73,42 @@ def add_response():
 
     return jsonify({"message": "Response added successfully!"}), 201
 
-# Update feedback and vote status (upvote/downvote)
 @app.route("/responses/<response_id>", methods=["PUT"])
 def update_feedback(response_id):
     data = request.get_json()
+
+    # Convert response_id to UUID
+    try:
+        response_uuid = uuid.UUID(response_id)
+    except ValueError:
+        return jsonify({"error": "Invalid UUID format"}), 400
+
     with next(get_db()) as db:
-        response = db.query(LLMResponseModel).filter(LLMResponseModel.response_id == response_id).first()
+        response = db.query(LLMResponseModel).filter(LLMResponseModel.response_id == response_uuid).first()
 
         if response:
+            # Handle is_upvoted logic (Upvote / Downvote)
             if "is_upvoted" in data:
-                response.is_upvoted = data["is_upvoted"]
+                if data["is_upvoted"] is True:
+                    # If is_upvoted is True, set it to None if it's already True
+                    if response.is_upvoted is True:
+                        response.is_upvoted = None  # Un-vote if already upvoted
+                    else:
+                        response.is_upvoted = True  # Set to True (upvote)
+                elif data["is_upvoted"] is False:
+                    # If is_upvoted is False, set it to False (downvote)
+                    if response.is_upvoted is False:
+                        response.is_upvoted = None  # Un-vote if already downvoted
+                    else:
+                        response.is_upvoted = False  # Set to False (downvote)
+                else:
+                    # If is_upvoted is None or no value, set to None (remove vote)
+                    response.is_upvoted = None
+
+            # Handle feedback logic
             if "feedback" in data:
                 response.feedback = data["feedback"]
+
             db.commit()
 
             # Emit the updated data to all connected clients
@@ -94,12 +120,13 @@ def update_feedback(response_id):
                 "is_upvoted": response.is_upvoted,
                 "feedback": response.feedback,
                 "is_refreshed": response.is_refreshed,
-                "response_timestamp": response.response_timestamp
+                "response_timestamp": response.response_timestamp.strftime("%Y-%m-%d %H:%M:%S")  # Convert datetime to string
             })
 
             return jsonify({"message": "Feedback and/or vote updated successfully!"}), 200
         else:
             return jsonify({"error": "Response not found"}), 404
+
 
 # Socket.IO event listener (for debugging)
 @socketio.on("connect")
